@@ -3,15 +3,12 @@ Brain Tumor Detection - Gradio Web Interface
 Authors: Fatima Azeem, Ruqqayya Bibi
 Program: BS AI-S23
 Instructor: Ma'am Sana Saleem
-
-This module provides a user-friendly web interface for the brain tumor
-detection system using Gradio.
 """
 
 import gradio as gr
 import numpy as np
 import cv2
-from brain_tumor_detection import BrainTumorDetector, create_visualization_grid
+from brain_tumor_detection import BrainTumorDetector
 
 
 def process_mri_image(
@@ -22,34 +19,19 @@ def process_mri_image(
     morph_operation,
     morph_kernel,
     morph_iterations,
+    intensity_threshold,
     min_area_ratio,
+    circularity_threshold,
+    min_intensity_ratio,
     boundary_thickness
 ):
-    """
-    Process an MRI image and return detection results.
-
-    Args:
-        image: Input MRI image from Gradio
-        noise_filter: Noise removal method
-        noise_kernel: Kernel size for noise removal
-        contrast_method: Contrast enhancement method
-        morph_operation: Morphological operation type
-        morph_kernel: Morphological kernel size
-        morph_iterations: Number of morphological iterations
-        min_area_ratio: Minimum area ratio for tumor detection
-        boundary_thickness: Thickness of tumor boundary
-
-    Returns:
-        Tuple of processed images and detection info
-    """
+    """Process an MRI image and return detection results."""
     if image is None:
-        return None, None, None, None, None, "Please upload an MRI image."
+        return None, None, None, None, None, None, "Please upload an MRI image."
 
     try:
-        # Create detector instance
         detector = BrainTumorDetector()
 
-        # Process the image
         results = detector.process_image(
             image_input=image,
             noise_filter=noise_filter,
@@ -58,59 +40,70 @@ def process_mri_image(
             morph_operation=morph_operation,
             morph_kernel=int(morph_kernel),
             morph_iterations=int(morph_iterations),
+            intensity_threshold=intensity_threshold,
             min_area_ratio=min_area_ratio,
-            boundary_color=(0, 255, 0),  # Green boundary
+            circularity_threshold=circularity_threshold,
+            min_intensity_ratio=min_intensity_ratio,
+            boundary_color=(0, 255, 0),
             boundary_thickness=int(boundary_thickness)
         )
 
-        # Prepare output images
         original = results["original"]
         preprocessed = results["preprocessed"]
+        brain_mask = results["brain_mask"]
         binary_mask = results["binary_mask"]
         tumor_mask = results["tumor_mask"]
         result_with_boundary = results["result"]
 
-        # Prepare detection info text
         tumor_info = results["tumor_info"]
+        brain_stats = results.get("brain_stats", {})
+
         if results["tumor_detected"]:
             info_text = f"""
-## Tumor Detection Results
+## TUMOR DETECTED
 
-**Status:** Tumor Detected
+**Confidence Level:** {tumor_info['confidence']}
 
-**Tumor Statistics:**
-- Area: {tumor_info['area']} pixels
-- Centroid: ({tumor_info['centroid'][0]}, {tumor_info['centroid'][1]})
-- Bounding Box: x={tumor_info['bounding_box'][0]}, y={tumor_info['bounding_box'][1]},
-  width={tumor_info['bounding_box'][2]}, height={tumor_info['bounding_box'][3]}
-- Number of Detected Regions: {tumor_info['num_regions']}
+### Tumor Statistics:
+| Metric | Value |
+|--------|-------|
+| Area | {tumor_info['area']} pixels |
+| Centroid | ({tumor_info['centroid'][0]}, {tumor_info['centroid'][1]}) |
+| Circularity | {tumor_info['circularity']} |
+| Intensity Ratio | {tumor_info['intensity_ratio']}x brighter than median |
+| Candidate Regions | {tumor_info['num_regions']} |
 
-**Processing Parameters:**
-- Noise Filter: {noise_filter}
-- Contrast Enhancement: {contrast_method}
-- Morphological Operation: {morph_operation}
+### Why Detected:
+- Region is **{tumor_info['intensity_ratio']}x brighter** than brain median (threshold: {min_intensity_ratio}x)
+- Circularity of **{tumor_info['circularity']}** meets threshold ({circularity_threshold})
+- Area within valid range
 """
         else:
             info_text = f"""
-## Tumor Detection Results
+## NO TUMOR DETECTED
 
-**Status:** No Tumor Detected
+The scan appears **healthy** - no abnormal regions meeting tumor criteria were found.
 
-The system did not detect any significant tumor regions in this MRI scan.
-This could mean:
-1. The scan is healthy (no tumor present)
-2. The tumor is too small to detect with current parameters
-3. Parameters may need adjustment for this specific image
+### Brain Statistics:
+| Metric | Value |
+|--------|-------|
+| Median Intensity | {brain_stats.get('median', 'N/A'):.1f} |
+| Std Deviation | {brain_stats.get('std', 'N/A'):.1f} |
+| 95th Percentile | {brain_stats.get('p95', 'N/A'):.1f} |
 
-**Try adjusting:**
-- Decrease the minimum area ratio
-- Try different noise filters
-- Adjust morphological parameters
+### Detection Criteria Used:
+- Minimum intensity ratio: **{min_intensity_ratio}x** brighter than median
+- Minimum circularity: **{circularity_threshold}**
+- Minimum area: **{min_area_ratio*100:.1f}%** of brain
+- Intensity threshold: **{intensity_threshold*100:.0f}th** percentile
+
+*If you believe there should be a detection, try lowering the intensity ratio or thresholds.*
 """
 
         return (
             original,
             preprocessed,
+            brain_mask,
             binary_mask,
             tumor_mask,
             result_with_boundary,
@@ -119,34 +112,17 @@ This could mean:
 
     except Exception as e:
         error_msg = f"Error processing image: {str(e)}"
-        return None, None, None, None, None, error_msg
+        return None, None, None, None, None, None, error_msg
 
 
 def create_demo_interface():
     """Create and return the Gradio interface."""
 
-    # Custom CSS for better styling
-    custom_css = """
-    .gradio-container {
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
-    .title-text {
-        text-align: center;
-        color: #2c3e50;
-    }
-    .info-box {
-        background-color: #f8f9fa;
-        border-radius: 10px;
-        padding: 15px;
-    }
-    """
-
-    with gr.Blocks(css=custom_css, title="Brain Tumor Detection System") as demo:
-        # Header
+    with gr.Blocks(title="Brain Tumor Detection System") as demo:
         gr.Markdown(
             """
             # Brain Tumor Detection Using Digital Image Processing
-            ### A DIP-based system for detecting brain tumors in MRI scans
+            ### Classical DIP-based system for detecting brain tumors in MRI scans
 
             **Authors:** Fatima Azeem, Ruqqayya Bibi | **Program:** BS AI-S23 | **Instructor:** Ma'am Sana Saleem
 
@@ -155,120 +131,115 @@ def create_demo_interface():
         )
 
         with gr.Row():
-            # Left column - Input and Parameters
             with gr.Column(scale=1):
                 gr.Markdown("### Upload MRI Image")
                 input_image = gr.Image(
                     label="Upload MRI Scan",
                     type="numpy",
-                    height=300
+                    height=250
                 )
 
                 gr.Markdown("### Processing Parameters")
 
-                with gr.Accordion("Preprocessing Settings", open=True):
+                with gr.Accordion("Preprocessing", open=False):
                     noise_filter = gr.Dropdown(
                         choices=["gaussian", "median", "bilateral"],
                         value="gaussian",
-                        label="Noise Removal Filter"
+                        label="Noise Filter"
                     )
                     noise_kernel = gr.Slider(
-                        minimum=3,
-                        maximum=15,
-                        step=2,
-                        value=5,
-                        label="Noise Filter Kernel Size"
+                        minimum=3, maximum=15, step=2, value=5,
+                        label="Filter Kernel Size"
                     )
                     contrast_method = gr.Dropdown(
                         choices=["clahe", "histogram"],
                         value="clahe",
-                        label="Contrast Enhancement Method"
+                        label="Contrast Enhancement"
                     )
 
-                with gr.Accordion("Segmentation Settings", open=True):
+                with gr.Accordion("Morphological Operations", open=False):
                     morph_operation = gr.Dropdown(
                         choices=["closing", "opening", "dilation", "erosion"],
                         value="closing",
-                        label="Morphological Operation"
+                        label="Operation Type"
                     )
                     morph_kernel = gr.Slider(
-                        minimum=3,
-                        maximum=15,
-                        step=2,
-                        value=5,
-                        label="Morphological Kernel Size"
+                        minimum=3, maximum=15, step=2, value=5,
+                        label="Kernel Size"
                     )
                     morph_iterations = gr.Slider(
-                        minimum=1,
-                        maximum=10,
-                        step=1,
-                        value=2,
-                        label="Morphological Iterations"
+                        minimum=1, maximum=10, step=1, value=2,
+                        label="Iterations"
                     )
 
-                with gr.Accordion("Detection Settings", open=True):
-                    min_area_ratio = gr.Slider(
-                        minimum=0.001,
-                        maximum=0.1,
-                        step=0.001,
-                        value=0.01,
-                        label="Minimum Area Ratio"
+                with gr.Accordion("Detection Thresholds (Important)", open=True):
+                    intensity_threshold = gr.Slider(
+                        minimum=0.7, maximum=0.98, step=0.01, value=0.85,
+                        label="Intensity Percentile Threshold",
+                        info="Only consider pixels above this percentile"
                     )
+                    min_intensity_ratio = gr.Slider(
+                        minimum=1.1, maximum=2.0, step=0.05, value=1.4,
+                        label="Min Intensity Ratio",
+                        info="Tumor must be this much brighter than brain median"
+                    )
+                    min_area_ratio = gr.Slider(
+                        minimum=0.005, maximum=0.1, step=0.005, value=0.01,
+                        label="Min Area Ratio",
+                        info="Minimum tumor size as % of brain"
+                    )
+                    circularity_threshold = gr.Slider(
+                        minimum=0.1, maximum=0.7, step=0.05, value=0.3,
+                        label="Min Circularity",
+                        info="Shape compactness (1.0 = perfect circle)"
+                    )
+
+                with gr.Accordion("Display", open=False):
                     boundary_thickness = gr.Slider(
-                        minimum=1,
-                        maximum=5,
-                        step=1,
-                        value=2,
+                        minimum=1, maximum=5, step=1, value=2,
                         label="Boundary Thickness"
                     )
 
                 process_btn = gr.Button("Detect Tumor", variant="primary", size="lg")
 
-            # Right column - Results
             with gr.Column(scale=2):
-                gr.Markdown("### Detection Results")
+                gr.Markdown("### Results")
 
                 with gr.Row():
-                    with gr.Column():
-                        output_original = gr.Image(label="Original Image", height=200)
-                    with gr.Column():
-                        output_preprocessed = gr.Image(label="Preprocessed Image", height=200)
+                    output_original = gr.Image(label="Original", height=160)
+                    output_preprocessed = gr.Image(label="Preprocessed", height=160)
+                    output_brain_mask = gr.Image(label="Brain Mask", height=160)
 
                 with gr.Row():
-                    with gr.Column():
-                        output_binary = gr.Image(label="Binary Mask (Otsu)", height=200)
-                    with gr.Column():
-                        output_tumor_mask = gr.Image(label="Tumor Mask", height=200)
+                    output_binary = gr.Image(label="Abnormal Regions", height=160)
+                    output_tumor_mask = gr.Image(label="Tumor Mask", height=160)
+                    output_result = gr.Image(label="Final Result", height=160)
 
-                with gr.Row():
-                    output_result = gr.Image(label="Final Result with Tumor Boundary", height=300)
+                detection_info = gr.Markdown(
+                    value="Upload an MRI image and click **Detect Tumor** to analyze."
+                )
 
-                with gr.Row():
-                    detection_info = gr.Markdown(
-                        value="Upload an MRI image and click 'Detect Tumor' to see results."
-                    )
-
-        # Footer with methodology info
         gr.Markdown(
             """
             ---
-            ### Methodology
+            ### How It Works
 
-            This system uses classical Digital Image Processing techniques:
+            1. **Brain Extraction** - Isolates brain from background using Otsu's method
+            2. **Statistical Analysis** - Calculates intensity distribution (mean, median, percentiles)
+            3. **Abnormality Detection** - Finds regions above the intensity percentile threshold
+            4. **Validation** - Filters candidates by:
+               - **Intensity ratio**: Must be significantly brighter than brain median
+               - **Size**: Must be within reasonable tumor size range
+               - **Shape**: Must be reasonably circular/compact
 
-            1. **Preprocessing:** Grayscale conversion, noise removal (Gaussian/Median/Bilateral filtering),
-               contrast enhancement (CLAHE/Histogram Equalization)
-            2. **Segmentation:** Otsu's automatic thresholding to separate foreground from background
-            3. **Refinement:** Morphological operations (closing, opening, dilation, erosion) to clean the mask
-            4. **Detection:** Connected component analysis to identify and isolate tumor regions
-            5. **Visualization:** Contour extraction and boundary drawing on original image
-
-            ---
-            *Digital Image Processing Project - 2024*
+            ### Key Insight
+            A healthy brain has relatively **uniform intensity distribution**. Tumors appear as
+            **abnormally bright regions** that are significantly brighter than surrounding tissue.
+            The system requires a region to be at least **{min_intensity_ratio}x brighter** than
+            the median brain intensity to be considered a tumor.
             """
         )
 
-        # Connect the process button
         process_btn.click(
             fn=process_mri_image,
             inputs=[
@@ -279,12 +250,16 @@ def create_demo_interface():
                 morph_operation,
                 morph_kernel,
                 morph_iterations,
+                intensity_threshold,
                 min_area_ratio,
+                circularity_threshold,
+                min_intensity_ratio,
                 boundary_thickness
             ],
             outputs=[
                 output_original,
                 output_preprocessed,
+                output_brain_mask,
                 output_binary,
                 output_tumor_mask,
                 output_result,
@@ -292,27 +267,13 @@ def create_demo_interface():
             ]
         )
 
-        # Add examples if sample images exist
-        gr.Markdown(
-            """
-            ### Tips for Best Results
-
-            - Use high-quality MRI scans in JPEG, PNG, or similar formats
-            - Adjust the noise filter based on image quality
-            - CLAHE generally works better than histogram equalization for MRI images
-            - If no tumor is detected, try decreasing the minimum area ratio
-            - For noisy images, increase the noise filter kernel size
-            """
-        )
-
     return demo
 
 
 if __name__ == "__main__":
-    # Create and launch the interface
     demo = create_demo_interface()
     demo.launch(
-        share=False,  # Set to True to create a public link
+        share=False,
         server_name="127.0.0.1",
         server_port=7860,
         show_error=True
